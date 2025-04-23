@@ -1,0 +1,4 @@
+pandoc
+libcairo2-dev
+pango1.0-dev
+libffi-dev
