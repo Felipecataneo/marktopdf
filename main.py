@@ -1,194 +1,181 @@
+from __future__ import annotations
+
+import io
+import zipfile
+
 import streamlit as st
-import pypandoc
-import tempfile
-import os
-import mammoth
-import re
-from weasyprint import HTML
-import base64
+
+from converter import (
+    HIGHLIGHT_STYLES,
+    PAGE_SIZES,
+    THEME_NAMES,
+    PdfOptions,
+    extract_markdown,
+    markdown_to_pdf,
+)
 
 st.set_page_config(
     page_title="Conversor de Markdown para PDF",
     page_icon="📄",
-    layout="centered"
+    layout="wide",
 )
 
 st.title("📝 Conversor de Markdown para PDF")
-st.write("Carregue um documento Word (.docx) ou texto (.txt) contendo Markdown e converta-o para PDF formatado.")
+st.write(
+    "Cole o seu Markdown ou carregue arquivos `.md`, `.txt` ou `.docx` "
+    "e converta para um PDF formatado."
+)
 
-uploaded_file = st.file_uploader("Escolha um arquivo", type=['docx', 'txt'])
+# ---------------------------------------------------------------------------
+# Barra lateral: opções de saída do PDF
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.header("⚙️ Opções do PDF")
+    theme = st.selectbox("Tema", THEME_NAMES, index=0)
+    page_size = st.selectbox("Tamanho da página", PAGE_SIZES, index=0)
+    margin = st.select_slider(
+        "Margem", options=["1cm", "1.5cm", "2cm", "2.5cm", "3cm"], value="2cm"
+    )
+    highlight_style = st.selectbox("Estilo do código", HIGHLIGHT_STYLES, index=0)
+    show_page_numbers = st.checkbox("Numerar páginas", value=True)
 
-def extract_text_from_docx(docx_file):
-    """Extrai o texto de um arquivo DOCX."""
-    with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as temp_file:
-        temp_file.write(docx_file.getvalue())
-        temp_file_path = temp_file.name
-   
+options = PdfOptions(
+    theme=theme,
+    page_size=page_size,
+    margin=margin,
+    show_page_numbers=show_page_numbers,
+    highlight_style=highlight_style,
+)
+
+
+def _safe_convert(text: str) -> bytes | None:
+    """Converte tratando erros e reportando na UI."""
+    if not text or not text.strip():
+        st.warning("Não há conteúdo para converter.")
+        return None
     try:
-        result = mammoth.extract_raw_text(temp_file_path)
-        text = result.value
-        os.unlink(temp_file_path)
-        return text
-    except Exception as e:
-        st.error(f"Erro ao extrair texto do arquivo DOCX: {e}")
-        os.unlink(temp_file_path)
+        return markdown_to_pdf(text, options)
+    except Exception as exc:  # noqa: BLE001 - queremos mostrar qualquer erro ao usuário
+        st.error(f"Erro na conversão para PDF: {exc}")
         return None
 
-def read_text_file(txt_file):
-    """Lê o conteúdo de um arquivo TXT."""
-    return txt_file.getvalue().decode('utf-8')
 
-def markdown_to_pdf(markdown_text):
-    """Converte texto Markdown para PDF."""
-    try:
-        # Cria um arquivo HTML temporário
-        with tempfile.NamedTemporaryFile(suffix='.html', delete=False, mode='w', encoding='utf-8') as html_file:
-            # Converte Markdown para HTML usando pypandoc
-            html_content = pypandoc.convert_text(markdown_text, 'html', format='md')
-           
-            # Adiciona estilos CSS para melhorar a aparência
-            styled_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    body {{
-                        font-family: Arial, sans-serif;
-                        line-height: 1.6;
-                        margin: 2em;
-                        color: #333;
-                    }}
-                    h1, h2, h3, h4, h5, h6 {{
-                        color: #2c3e50;
-                        margin-top: 1.5em;
-                        margin-bottom: 0.5em;
-                    }}
-                    h1 {{ font-size: 2.2em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }}
-                    h2 {{ font-size: 1.8em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }}
-                    h3 {{ font-size: 1.5em; }}
-                    h4 {{ font-size: 1.3em; }}
-                    p {{ margin-bottom: 1em; }}
-                    code {{
-                        background-color: #f7f7f7;
-                        padding: 2px 4px;
-                        border-radius: 3px;
-                        font-family: monospace;
-                    }}
-                    pre {{
-                        background-color: #f7f7f7;
-                        padding: 16px;
-                        border-radius: 3px;
-                        overflow: auto;
-                        line-height: 1.45;
-                    }}
-                    blockquote {{
-                        border-left: 4px solid #ddd;
-                        padding-left: 1em;
-                        color: #666;
-                        margin-left: 0;
-                    }}
-                    table {{
-                        border-collapse: collapse;
-                        width: 100%;
-                        margin-bottom: 1em;
-                    }}
-                    th, td {{
-                        border: 1px solid #ddd;
-                        padding: 8px;
-                        text-align: left;
-                    }}
-                    th {{
-                        background-color: #f2f2f2;
-                    }}
-                    img {{
-                        max-width: 100%;
-                        height: auto;
-                    }}
-                    a {{
-                        color: #3498db;
-                        text-decoration: none;
-                    }}
-                    a:hover {{
-                        text-decoration: underline;
-                    }}
-                    ul, ol {{
-                        margin-bottom: 1em;
-                    }}
-                </style>
-            </head>
-            <body>
-                {html_content}
-            </body>
-            </html>
-            """
-            html_file.write(styled_html)
-            html_file_path = html_file.name
-       
-        # Gera o PDF a partir do HTML
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as pdf_file:
-            pdf_file_path = pdf_file.name
-       
-        HTML(html_file_path).write_pdf(pdf_file_path)
-       
-        # Limpa o arquivo HTML temporário
-        os.unlink(html_file_path)
-       
-        # Lê o PDF gerado
-        with open(pdf_file_path, 'rb') as file:
-            pdf_data = file.read()
-       
-        # Limpa o arquivo PDF temporário
-        os.unlink(pdf_file_path)
-       
-        return pdf_data
-   
-    except Exception as e:
-        st.error(f"Erro na conversão para PDF: {e}")
-        return None
+tab_texto, tab_arquivos = st.tabs(["✍️ Colar texto", "📁 Enviar arquivos"])
 
-if uploaded_file is not None:
-    st.info("Arquivo carregado. Processando...")
-   
-    # Extrai o texto dependendo do tipo de arquivo
-    if uploaded_file.name.endswith('.docx'):
-        markdown_text = extract_text_from_docx(uploaded_file)
-    else:  # .txt
-        markdown_text = read_text_file(uploaded_file)
-   
-    if markdown_text:
-        # Exibe o texto Markdown extraído
-        with st.expander("Visualizar Texto Markdown"):
-            st.text_area("Conteúdo do arquivo", markdown_text, height=300)
-       
-        # Permite editar o texto Markdown antes da conversão
-        edited_markdown = st.text_area("Editar Markdown (opcional)", markdown_text, height=300)
-       
-        # Botão para converter para PDF
-        if st.button("Converter para PDF"):
-            pdf_data = markdown_to_pdf(edited_markdown)
-           
-            if pdf_data:
-                # Codifica o PDF em base64 para download
-                b64_pdf = base64.b64encode(pdf_data).decode()
-               
-                # Cria um link de download
-                pdf_display = f'<iframe src="data:application/pdf;base64,{b64_pdf}" width="100%" height="500" type="application/pdf"></iframe>'
-                st.markdown(pdf_display, unsafe_allow_html=True)
-               
-                # Botão de download
-                href = f'<a href="data:application/pdf;base64,{b64_pdf}" download="documento_convertido.pdf">📥 Baixar PDF</a>'
-                st.markdown(href, unsafe_allow_html=True)
-               
-                st.success("Conversão concluída com sucesso!")
+# ---------------------------------------------------------------------------
+# Aba 1: colar Markdown direto, com preview ao vivo
+# ---------------------------------------------------------------------------
+with tab_texto:
+    col_edit, col_preview = st.columns(2)
+    with col_edit:
+        st.subheader("Editor")
+        markdown_text = st.text_area(
+            "Markdown",
+            height=420,
+            placeholder="# Título\n\nEscreva **Markdown** aqui...",
+            label_visibility="collapsed",
+        )
+    with col_preview:
+        st.subheader("Pré-visualização")
+        if markdown_text.strip():
+            st.markdown(markdown_text)
+        else:
+            st.caption("A pré-visualização aparece aqui conforme você digita.")
 
-# Instruções e informações adicionais
+    if st.button("Converter para PDF", type="primary", key="btn_texto"):
+        pdf_data = _safe_convert(markdown_text)
+        if pdf_data:
+            st.success("Conversão concluída!")
+            st.download_button(
+                "📥 Baixar PDF",
+                data=pdf_data,
+                file_name="documento.pdf",
+                mime="application/pdf",
+                key="dl_texto",
+            )
+
+# ---------------------------------------------------------------------------
+# Aba 2: upload de um ou vários arquivos (ZIP quando há mais de um)
+# ---------------------------------------------------------------------------
+with tab_arquivos:
+    uploaded_files = st.file_uploader(
+        "Escolha um ou mais arquivos",
+        type=["docx", "txt", "md"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files:
+        results: list[tuple[str, bytes]] = []
+        for uploaded in uploaded_files:
+            with st.expander(f"📄 {uploaded.name}", expanded=len(uploaded_files) == 1):
+                try:
+                    text = extract_markdown(uploaded.name, uploaded.getvalue())
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Erro ao ler '{uploaded.name}': {exc}")
+                    continue
+
+                edited = st.text_area(
+                    "Editar Markdown antes de converter",
+                    value=text,
+                    height=260,
+                    key=f"edit_{uploaded.name}",
+                )
+                pdf_data = _safe_convert(edited) if st.button(
+                    "Converter", key=f"conv_{uploaded.name}"
+                ) else None
+
+                if pdf_data:
+                    pdf_name = uploaded.name.rsplit(".", 1)[0] + ".pdf"
+                    results.append((pdf_name, pdf_data))
+                    st.download_button(
+                        "📥 Baixar PDF",
+                        data=pdf_data,
+                        file_name=pdf_name,
+                        mime="application/pdf",
+                        key=f"dl_{uploaded.name}",
+                    )
+
+        # Converter todos de uma vez e empacotar em ZIP.
+        if len(uploaded_files) > 1 and st.button(
+            "Converter todos e baixar ZIP", type="primary"
+        ):
+            zip_buffer = io.BytesIO()
+            converted = 0
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for uploaded in uploaded_files:
+                    try:
+                        text = extract_markdown(uploaded.name, uploaded.getvalue())
+                        pdf_data = markdown_to_pdf(text, options)
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Falha em '{uploaded.name}': {exc}")
+                        continue
+                    zf.writestr(uploaded.name.rsplit(".", 1)[0] + ".pdf", pdf_data)
+                    converted += 1
+
+            if converted:
+                st.success(f"{converted} arquivo(s) convertido(s).")
+                st.download_button(
+                    "📥 Baixar ZIP",
+                    data=zip_buffer.getvalue(),
+                    file_name="pdfs_convertidos.zip",
+                    mime="application/zip",
+                )
+
+# ---------------------------------------------------------------------------
+# Ajuda
+# ---------------------------------------------------------------------------
 with st.expander("ℹ️ Sobre este aplicativo"):
-    st.markdown("""
-    ### Como usar
-    1. Carregue um arquivo Word (.docx) ou texto (.txt) que contenha texto formatado em Markdown
-    2. Visualize e edite o texto Markdown se necessário
-    3. Clique em 'Converter para PDF' para gerar o documento formatado
-    4. Visualize o PDF gerado no navegador
-    5. Baixe o PDF resultante).
-    """)
+    st.markdown(
+        """
+        ### Como usar
+        1. **Colar texto**: escreva ou cole Markdown e veja a pré-visualização ao vivo.
+        2. **Enviar arquivos**: carregue `.md`, `.txt` ou `.docx` (um ou vários).
+        3. Ajuste **tema**, **tamanho de página** e **margem** na barra lateral.
+        4. Clique em **Converter para PDF** e baixe o resultado.
+
+        ### Recursos suportados
+        - Tabelas, listas, citações e blocos de código com destaque de sintaxe
+        - Fórmulas matemáticas em LaTeX (`$...$` e `$$...$$`)
+        - Numeração de páginas e escolha de tamanho (A4, Letter, Legal)
+        """
+    )
