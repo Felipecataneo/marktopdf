@@ -6,6 +6,7 @@ import zipfile
 import streamlit as st
 
 from converter import (
+    HIGHLIGHT_STYLES,
     PAGE_SIZES,
     THEME_NAMES,
     PdfOptions,
@@ -35,6 +36,7 @@ with st.sidebar:
     margin = st.select_slider(
         "Margem", options=["1cm", "1.5cm", "2cm", "2.5cm", "3cm"], value="2cm"
     )
+    highlight_style = st.selectbox("Estilo do código", HIGHLIGHT_STYLES, index=0)
     show_page_numbers = st.checkbox("Numerar páginas", value=True)
 
 options = PdfOptions(
@@ -42,6 +44,7 @@ options = PdfOptions(
     page_size=page_size,
     margin=margin,
     show_page_numbers=show_page_numbers,
+    highlight_style=highlight_style,
 )
 
 

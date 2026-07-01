@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from functools import lru_cache
 
 import mammoth
 import pypandoc
@@ -98,6 +99,17 @@ _THEMES: dict[str, str] = {
 
 THEME_NAMES = list(_THEMES.keys())
 PAGE_SIZES = ["A4", "Letter", "Legal"]
+# Estilos de destaque de sintaxe embutidos no pandoc.
+HIGHLIGHT_STYLES = [
+    "tango",
+    "pygments",
+    "kate",
+    "espresso",
+    "zenburn",
+    "breezedark",
+    "haddock",
+    "monochrome",
+]
 
 
 @dataclass
@@ -149,6 +161,7 @@ def markdown_to_html(markdown_text: str, options: PdfOptions | None = None) -> s
     )
 
     theme_css = _THEMES.get(options.theme, _THEMES["Clássico"])
+    highlight_css = _highlight_css(options.highlight_style)
     page_css = _page_css(options)
     mathjax = (
         '<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>'
@@ -165,6 +178,7 @@ def markdown_to_html(markdown_text: str, options: PdfOptions | None = None) -> s
         body {{ margin: 0; }}
         {theme_css}
         {_BASE_CSS}
+        {highlight_css}
     </style>
     {mathjax}
 </head>
@@ -172,6 +186,41 @@ def markdown_to_html(markdown_text: str, options: PdfOptions | None = None) -> s
 {body}
 </body>
 </html>"""
+
+
+_HIGHLIGHT_MARKER = "/* CSS for syntax highlighting */"
+
+
+@lru_cache(maxsize=None)
+def _highlight_css(style: str) -> str:
+    """Retorna o CSS de destaque de sintaxe do pandoc para um estilo.
+
+    O pandoc só embute esse CSS na saída ``--standalone``, misturado ao CSS
+    padrão de documento. Convertemos um bloco de código de exemplo e isolamos
+    apenas a parte após o marcador de highlighting. O resultado é cacheado por
+    estilo (a chamada ao pandoc é relativamente cara).
+    """
+    sample = "```python\ndef _f(x):\n    return x\n```"
+    try:
+        standalone = pypandoc.convert_text(
+            sample,
+            "html5",
+            format="markdown",
+            extra_args=["--standalone", f"--highlight-style={style}"],
+        )
+    except Exception:  # noqa: BLE001 - highlight é opcional; degrada sem cor
+        return ""
+
+    start = standalone.find("<style")
+    end = standalone.find("</style>", start)
+    if start == -1 or end == -1:
+        return ""
+    block = standalone[standalone.find(">", start) + 1 : end]
+
+    marker_pos = block.find(_HIGHLIGHT_MARKER)
+    if marker_pos == -1:
+        return ""
+    return block[marker_pos + len(_HIGHLIGHT_MARKER):].strip()
 
 
 def _page_css(options: PdfOptions) -> str:

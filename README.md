@@ -12,7 +12,7 @@ baixando tudo em um `.zip`.
 - **Conversão em lote** com download em ZIP.
 - **Temas de PDF**: Clássico, Moderno e Acadêmico.
 - **Tamanho de página** (A4, Letter, Legal), **margem** e **numeração de páginas** configuráveis.
-- **Destaque de sintaxe** em blocos de código (Pygments via pandoc).
+- **Destaque de sintaxe** em blocos de código, com estilo selecionável (tango, pygments, kate, zenburn, breezedark, etc.) e cores aplicadas de fato no PDF.
 - **Fórmulas matemáticas** em LaTeX (`$...$` e `$$...$$`) via MathJax.
 - Download nativo do Streamlit (sem hacks de HTML/base64).
 
