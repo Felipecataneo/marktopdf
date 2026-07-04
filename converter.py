@@ -1,4 +1,4 @@
-"""Lógica de conversão de Markdown para PDF.
+"""Lógica de conversão de Markdown para PDF e extração de documentos para Markdown.
 
 Este módulo é independente da interface Streamlit para facilitar testes
 e reuso. A UI vive em ``main.py``.
@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import mammoth
+import pymupdf
+import pymupdf4llm
 import pypandoc
 from weasyprint import HTML
 
@@ -99,7 +101,6 @@ _THEMES: dict[str, str] = {
 
 THEME_NAMES = list(_THEMES.keys())
 PAGE_SIZES = ["A4", "Letter", "Legal"]
-# Estilos de destaque de sintaxe embutidos no pandoc.
 HIGHLIGHT_STYLES = [
     "tango",
     "pygments",
@@ -120,29 +121,40 @@ class PdfOptions:
     page_size: str = "A4"
     margin: str = "2cm"
     show_page_numbers: bool = True
-    highlight_style: str = "tango"  # estilo Pygments do pandoc
+    highlight_style: str = "tango"
 
 
 # ---------------------------------------------------------------------------
-# Extração de texto de arquivos de entrada
+# Extração de texto de arquivos de entrada (PDF, DOCX, TXT, MD)
 # ---------------------------------------------------------------------------
 
 def extract_markdown(filename: str, data: bytes) -> str:
     """Extrai texto Markdown a partir do conteúdo bruto de um arquivo.
 
-    Suporta ``.docx`` (via mammoth) e arquivos de texto (``.txt``/``.md``).
+    Suporta ``.docx`` (mammoth), ``.pdf`` (pymupdf4llm) e arquivos de texto (``.txt``/``.md``).
     """
     lower = filename.lower()
     if lower.endswith(".docx"):
         return _extract_text_from_docx(data)
-    # .txt, .md e afins são tratados como texto puro UTF-8.
+    elif lower.endswith(".pdf"):
+        return _extract_text_from_pdf(data)
+    
+    # Arquivos .txt, .md e afins são tratados como texto puro UTF-8.
     return data.decode("utf-8", errors="replace")
 
 
 def _extract_text_from_docx(data: bytes) -> str:
-    """Extrai o texto de um arquivo DOCX diretamente da memória (sem temporários)."""
+    """Extrai o texto de um arquivo DOCX diretamente da memória (sem arquivos temporários)."""
     result = mammoth.extract_raw_text(io.BytesIO(data))
     return result.value
+
+
+def _extract_text_from_pdf(data: bytes) -> str:
+    """Extrai texto no formato Markdown estruturado a partir de um PDF em memória."""
+    # Abre o PDF a partir de um buffer de bytes na memória para evitar escrita em disco
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    # Converte o documento PDF para Markdown formatado para consumo por LLMs
+    return pymupdf4llm.to_markdown(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +165,6 @@ def markdown_to_html(markdown_text: str, options: PdfOptions | None = None) -> s
     """Converte Markdown em um documento HTML completo e estilizado."""
     options = options or PdfOptions()
 
-    # Extensões do pandoc: tabelas, código cercado, notas de rodapé, matemática.
     pandoc_format = "markdown+tex_math_dollars+backtick_code_blocks+pipe_tables+footnotes"
     extra_args = [f"--highlight-style={options.highlight_style}", "--mathjax"]
     body = pypandoc.convert_text(
@@ -193,13 +204,7 @@ _HIGHLIGHT_MARKER = "/* CSS for syntax highlighting */"
 
 @lru_cache(maxsize=None)
 def _highlight_css(style: str) -> str:
-    """Retorna o CSS de destaque de sintaxe do pandoc para um estilo.
-
-    O pandoc só embute esse CSS na saída ``--standalone``, misturado ao CSS
-    padrão de documento. Convertemos um bloco de código de exemplo e isolamos
-    apenas a parte após o marcador de highlighting. O resultado é cacheado por
-    estilo (a chamada ao pandoc é relativamente cara).
-    """
+    """Retorna o CSS de destaque de sintaxe do pandoc para um estilo."""
     sample = "```python\ndef _f(x):\n    return x\n```"
     try:
         standalone = pypandoc.convert_text(
@@ -208,7 +213,7 @@ def _highlight_css(style: str) -> str:
             format="markdown",
             extra_args=["--standalone", f"--highlight-style={style}"],
         )
-    except Exception:  # noqa: BLE001 - highlight é opcional; degrada sem cor
+    except Exception:
         return ""
 
     start = standalone.find("<style")
@@ -244,10 +249,6 @@ def _page_css(options: PdfOptions) -> str:
 
 
 def markdown_to_pdf(markdown_text: str, options: PdfOptions | None = None) -> bytes:
-    """Converte texto Markdown para os bytes de um PDF.
-
-    Levanta exceção em caso de falha; a UI é responsável por tratá-la.
-    """
+    """Converte texto Markdown para os bytes de um PDF."""
     html = markdown_to_html(markdown_text, options)
-    # WeasyPrint aceita string diretamente, sem arquivos temporários no disco.
     return HTML(string=html).write_pdf()
