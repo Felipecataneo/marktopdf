@@ -15,22 +15,22 @@ from converter import (
 )
 
 st.set_page_config(
-    page_title="Conversor de Markdown para PDF",
+    page_title="Conversor de Documentos e PDFs",
     page_icon="📄",
     layout="wide",
 )
 
-st.title("📝 Conversor de Markdown para PDF")
+st.title("📝 Conversor Inteligente de Documentos para Markdown & PDF")
 st.write(
-    "Cole o seu Markdown ou carregue arquivos `.md`, `.txt` ou `.docx` "
-    "e converta para um PDF formatado."
+    "Cole o seu Markdown ou carregue arquivos (`.pdf`, `.docx`, `.md`, `.txt`) "
+    "para extrair Markdown estruturado para LLMs ou converter para PDF formatado."
 )
 
 # ---------------------------------------------------------------------------
 # Barra lateral: opções de saída do PDF
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("⚙️ Opções do PDF")
+    st.header("⚙️ Opções de Exportação (PDF)")
     theme = st.selectbox("Tema", THEME_NAMES, index=0)
     page_size = st.selectbox("Tamanho da página", PAGE_SIZES, index=0)
     margin = st.select_slider(
@@ -55,12 +55,12 @@ def _safe_convert(text: str) -> bytes | None:
         return None
     try:
         return markdown_to_pdf(text, options)
-    except Exception as exc:  # noqa: BLE001 - queremos mostrar qualquer erro ao usuário
+    except Exception as exc:
         st.error(f"Erro na conversão para PDF: {exc}")
         return None
 
 
-tab_texto, tab_arquivos = st.tabs(["✍️ Colar texto", "📁 Enviar arquivos"])
+tab_texto, tab_arquivos = st.tabs(["✍️ Colar texto / Editor", "📁 Processar arquivos & PDFs"])
 
 # ---------------------------------------------------------------------------
 # Aba 1: colar Markdown direto, com preview ao vivo
@@ -68,11 +68,11 @@ tab_texto, tab_arquivos = st.tabs(["✍️ Colar texto", "📁 Enviar arquivos"]
 with tab_texto:
     col_edit, col_preview = st.columns(2)
     with col_edit:
-        st.subheader("Editor")
+        st.subheader("Editor Markdown")
         markdown_text = st.text_area(
             "Markdown",
             height=420,
-            placeholder="# Título\n\nEscreva **Markdown** aqui...",
+            placeholder="# Título\n\nEscreva **Markdown** aqui ou edite o conteúdo extraído...",
             label_visibility="collapsed",
         )
     with col_preview:
@@ -95,12 +95,12 @@ with tab_texto:
             )
 
 # ---------------------------------------------------------------------------
-# Aba 2: upload de um ou vários arquivos (ZIP quando há mais de um)
+# Aba 2: upload de arquivos, incluindo PDFs (ZIP para múltiplos arquivos)
 # ---------------------------------------------------------------------------
 with tab_arquivos:
     uploaded_files = st.file_uploader(
-        "Escolha um ou mais arquivos",
-        type=["docx", "txt", "md"],
+        "Carregue um ou mais arquivos (PDFs, Word ou arquivos de texto)",
+        type=["pdf", "docx", "txt", "md"],  # PDF adicionado aqui
         accept_multiple_files=True,
     )
 
@@ -109,35 +109,40 @@ with tab_arquivos:
         for uploaded in uploaded_files:
             with st.expander(f"📄 {uploaded.name}", expanded=len(uploaded_files) == 1):
                 try:
+                    # Chamar extrator que agora processa PDFs pelo pymupdf4llm
                     text = extract_markdown(uploaded.name, uploaded.getvalue())
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     st.error(f"Erro ao ler '{uploaded.name}': {exc}")
                     continue
 
                 edited = st.text_area(
-                    "Editar Markdown antes de converter",
+                    "Markdown extraído (pode editar antes de converter ou copiar)",
                     value=text,
-                    height=260,
+                    height=300,
                     key=f"edit_{uploaded.name}",
                 )
-                pdf_data = _safe_convert(edited) if st.button(
-                    "Converter", key=f"conv_{uploaded.name}"
-                ) else None
+                
+                col_btn_conv, col_btn_down = st.columns(2)
+                with col_btn_conv:
+                    converter_clicado = st.button("Converter para Novo PDF", key=f"conv_{uploaded.name}")
+                
+                pdf_data = _safe_convert(edited) if converter_clicado else None
 
                 if pdf_data:
-                    pdf_name = uploaded.name.rsplit(".", 1)[0] + ".pdf"
+                    pdf_name = uploaded.name.rsplit(".", 1)[0] + "_formatado.pdf"
                     results.append((pdf_name, pdf_data))
-                    st.download_button(
-                        "📥 Baixar PDF",
-                        data=pdf_data,
-                        file_name=pdf_name,
-                        mime="application/pdf",
-                        key=f"dl_{uploaded.name}",
-                    )
+                    with col_btn_down:
+                        st.download_button(
+                            "📥 Baixar PDF Formatado",
+                            data=pdf_data,
+                            file_name=pdf_name,
+                            mime="application/pdf",
+                            key=f"dl_{uploaded.name}",
+                        )
 
-        # Converter todos de uma vez e empacotar em ZIP.
+        # Processar todos de uma vez e empacotar em ZIP
         if len(uploaded_files) > 1 and st.button(
-            "Converter todos e baixar ZIP", type="primary"
+            "Converter todos os arquivos enviados para PDF (ZIP)", type="primary"
         ):
             zip_buffer = io.BytesIO()
             converted = 0
@@ -146,18 +151,18 @@ with tab_arquivos:
                     try:
                         text = extract_markdown(uploaded.name, uploaded.getvalue())
                         pdf_data = markdown_to_pdf(text, options)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         st.error(f"Falha em '{uploaded.name}': {exc}")
                         continue
-                    zf.writestr(uploaded.name.rsplit(".", 1)[0] + ".pdf", pdf_data)
+                    zf.writestr(uploaded.name.rsplit(".", 1)[0] + "_formatado.pdf", pdf_data)
                     converted += 1
 
             if converted:
-                st.success(f"{converted} arquivo(s) convertido(s).")
+                st.success(f"{converted} arquivo(s) processado(s).")
                 st.download_button(
-                    "📥 Baixar ZIP",
+                    "📥 Baixar ZIP com PDFs",
                     data=zip_buffer.getvalue(),
-                    file_name="pdfs_convertidos.zip",
+                    file_name="documentos_formatados.zip",
                     mime="application/zip",
                 )
 
@@ -167,15 +172,14 @@ with tab_arquivos:
 with st.expander("ℹ️ Sobre este aplicativo"):
     st.markdown(
         """
-        ### Como usar
-        1. **Colar texto**: escreva ou cole Markdown e veja a pré-visualização ao vivo.
-        2. **Enviar arquivos**: carregue `.md`, `.txt` ou `.docx` (um ou vários).
-        3. Ajuste **tema**, **tamanho de página** e **margem** na barra lateral.
-        4. Clique em **Converter para PDF** e baixe o resultado.
-
+        ### Funcionalidades
+        1. **Conversor de PDF para LLM-Ready Markdown**: Envie arquivos `.pdf` de artigos ou relatórios de duas colunas para extrair texto estruturado com tabelas nativas de forma otimizada para IAs.
+        2. **Processamento em Memória**: Toda a extração ocorre diretamente na memória RAM, sem salvar arquivos no servidor, tornando o processo mais seguro e rápido.
+        3. **Editor em Tempo Real**: Altere o Markdown gerado e decida se quer copiar para o LLM ou converter em um novo PDF elegante e diagramado.
+        
         ### Recursos suportados
-        - Tabelas, listas, citações e blocos de código com destaque de sintaxe
-        - Fórmulas matemáticas em LaTeX (`$...$` e `$$...$$`)
-        - Numeração de páginas e escolha de tamanho (A4, Letter, Legal)
+        - Extração inteligente de tabelas de PDFs estruturados.
+        - Detecção de equações matemáticas no formato LaTeX (`$...$` e `$$...$$`).
+        - Formatação de títulos, listas e códigos em blocos de programação.
         """
     )
