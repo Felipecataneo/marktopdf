@@ -2,3 +2,4 @@ streamlit>=1.40,<2.0
 pypandoc>=1.13,<2.0
 mammoth>=1.8,<2.0
 weasyprint>=63,<66
+pymupdf4llm>=0.2.2
