@@ -7,6 +7,7 @@ e reuso. A UI vive em ``main.py``.
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -128,7 +129,30 @@ class PdfOptions:
 # Extração de texto de arquivos de entrada (PDF, DOCX, TXT, MD)
 # ---------------------------------------------------------------------------
 
-def extract_markdown(filename: str, data: bytes) -> str:
+PDF_ENGINES = ["Automático (layout por IA)", "Clássico (geométrico)"]
+
+
+@dataclass
+class PdfExtractOptions:
+    """Opções de extração de Markdown a partir de PDFs.
+
+    - ``engine``: "Automático" usa o motor de layout por IA do PyMuPDF
+      (melhor para papers de duas colunas); "Clássico" usa a análise
+      geométrica de colunas, útil quando o automático embaralha a ordem.
+    - ``strip_headers_footers``: remove cabeçalhos/rodapés repetidos e
+      números de página.
+    - ``include_picture_text``: inclui o texto sobreposto a figuras e
+      diagramas (costuma sair embaralhado em papers).
+    """
+
+    engine: str = PDF_ENGINES[0]
+    strip_headers_footers: bool = True
+    include_picture_text: bool = False
+
+
+def extract_markdown(
+    filename: str, data: bytes, pdf_options: PdfExtractOptions | None = None
+) -> str:
     """Extrai texto Markdown a partir do conteúdo bruto de um arquivo.
 
     Suporta ``.docx`` (mammoth), ``.pdf`` (pymupdf4llm) e arquivos de texto (``.txt``/``.md``).
@@ -137,8 +161,8 @@ def extract_markdown(filename: str, data: bytes) -> str:
     if lower.endswith(".docx"):
         return _extract_text_from_docx(data)
     elif lower.endswith(".pdf"):
-        return _extract_text_from_pdf(data)
-    
+        return _extract_text_from_pdf(data, pdf_options or PdfExtractOptions())
+
     # Arquivos .txt, .md e afins são tratados como texto puro UTF-8.
     return data.decode("utf-8", errors="replace")
 
@@ -149,12 +173,146 @@ def _extract_text_from_docx(data: bytes) -> str:
     return result.value
 
 
-def _extract_text_from_pdf(data: bytes) -> str:
-    """Extrai texto no formato Markdown estruturado a partir de um PDF em memória."""
+def _layout_engine_available() -> bool:
+    """Indica se o motor de layout por IA (pymupdf-layout) está instalado."""
+    try:
+        import pymupdf.layout  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _extract_text_from_pdf(data: bytes, options: PdfExtractOptions) -> str:
+    """Extrai texto no formato Markdown estruturado a partir de um PDF em memória.
+
+    Papers acadêmicos de duas colunas são o caso crítico: o motor de layout
+    por IA reconstrói a ordem de leitura e a hierarquia de títulos; o motor
+    clássico ordena blocos geometricamente. Em ambos os casos o resultado
+    passa por uma limpeza final (parágrafos religados, linhas soltas etc.).
+    """
+    use_layout = options.engine == PDF_ENGINES[0] and _layout_engine_available()
+    pymupdf4llm.use_layout(use_layout)
+
     # Abre o PDF a partir de um buffer de bytes na memória para evitar escrita em disco
     doc = pymupdf.open(stream=data, filetype="pdf")
-    # Converte o documento PDF para Markdown formatado para consumo por LLMs
-    return pymupdf4llm.to_markdown(doc)
+
+    strip = options.strip_headers_footers
+    if use_layout:
+        # Motor de IA: header/footer controlam cabeçalhos/rodapés repetidos;
+        # force_text=False descarta o texto sobreposto a figuras/diagramas.
+        md = pymupdf4llm.to_markdown(
+            doc,
+            header=not strip,
+            footer=not strip,
+            force_text=options.include_picture_text,
+        )
+    else:
+        # Motor clássico: margins ignora faixas do topo/rodapé da página.
+        # force_text=False não é suportado sem exportar imagens, então o
+        # texto de figuras é sempre incluído neste motor.
+        md = pymupdf4llm.to_markdown(
+            doc,
+            margins=(0, 50, 0, 50) if strip else 0,
+            table_strategy="lines_strict",
+        )
+    return _clean_pdf_markdown(md)
+
+
+# Prefixos de linha que indicam estrutura Markdown que não deve ser re-fluida
+# (títulos, tabelas, listas, citações, imagens, HTML/comentários).
+_STRUCTURAL_PREFIXES = ("#", "|", "-", "*", "+", ">", "!", "<", "```", "~~~")
+_ORDERED_ITEM_RE = re.compile(r"^\d{1,3}[.)]\s")
+_PAGE_NUMBER_RE = re.compile(r"^\d{1,4}$")
+# Fim de linha que sugere frase interrompida (sem pontuação terminal).
+_UNTERMINATED_RE = re.compile(r"[\w,;)]$")
+
+
+def _is_structural(line: str) -> bool:
+    stripped = line.lstrip()
+    return stripped.startswith(_STRUCTURAL_PREFIXES) or bool(
+        _ORDERED_ITEM_RE.match(stripped)
+    )
+
+
+def _clean_pdf_markdown(md: str) -> str:
+    """Limpeza final do Markdown extraído de um PDF.
+
+    - remove espaços à direita e números de página em linhas isoladas;
+    - religa linhas quebradas no meio de uma frase (inclusive hifenização);
+    - religa parágrafos partidos por quebras de página/coluna;
+    - normaliza sequências longas de linhas em branco.
+    """
+    lines = [line.rstrip() for line in md.splitlines()]
+
+    result: list[str] = []
+    in_code = False
+    for line in lines:
+        if line.lstrip().startswith(("```", "~~~")):
+            in_code = not in_code
+            result.append(line)
+            continue
+        if in_code:
+            result.append(line)
+            continue
+
+        if _PAGE_NUMBER_RE.match(line.strip()):
+            # Número de página isolado: descarta se estiver "flutuando" após
+            # uma linha em branco; caso contrário mantém como linha própria
+            # (nunca funde com o parágrafo anterior).
+            if not result or result[-1] == "":
+                continue
+            result.append(line)
+            continue
+
+        prev = result[-1] if result else ""
+        if (
+            line
+            and prev
+            and not _is_structural(line)
+            and not _is_structural(prev)
+            and not _PAGE_NUMBER_RE.match(prev.strip())
+            and not prev.endswith("\\")
+        ):
+            # Linha de continuação dentro do mesmo parágrafo (quebra "dura"
+            # produzida pelo motor clássico): junta na linha anterior.
+            if prev.endswith("-") and line[0].islower():
+                result[-1] = prev[:-1] + line
+            else:
+                result[-1] = prev + " " + line
+            continue
+
+        result.append(line)
+
+    # Religa parágrafos separados por linhas em branco quando o anterior
+    # termina sem pontuação final e o seguinte começa em minúscula — típico
+    # de parágrafos partidos na transição de coluna ou de página.
+    merged: list[str] = []
+    in_code = False
+    for line in result:
+        if line.lstrip().startswith(("```", "~~~")):
+            in_code = not in_code
+        if line and not in_code and not _is_structural(line):
+            j = len(merged) - 1
+            while j >= 0 and merged[j] == "":
+                j -= 1
+            if (
+                j >= 0
+                and merged[j]
+                and not _is_structural(merged[j])
+                and _UNTERMINATED_RE.search(merged[j])
+                and line[0].islower()
+            ):
+                if merged[j].endswith("-"):
+                    merged[j] = merged[j][:-1] + line
+                else:
+                    merged[j] = merged[j] + " " + line
+                del merged[j + 1 :]
+                continue
+        merged.append(line)
+
+    text = "\n".join(merged)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip() + "\n"
 
 
 # ---------------------------------------------------------------------------

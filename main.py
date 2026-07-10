@@ -8,7 +8,9 @@ import streamlit as st
 from converter import (
     HIGHLIGHT_STYLES,
     PAGE_SIZES,
+    PDF_ENGINES,
     THEME_NAMES,
+    PdfExtractOptions,
     PdfOptions,
     extract_markdown,
     markdown_to_pdf,
@@ -39,12 +41,43 @@ with st.sidebar:
     highlight_style = st.selectbox("Estilo do código", HIGHLIGHT_STYLES, index=0)
     show_page_numbers = st.checkbox("Numerar páginas", value=True)
 
+    st.header("📑 Opções de Extração (PDF → Markdown)")
+    pdf_engine = st.selectbox(
+        "Motor de extração",
+        PDF_ENGINES,
+        index=0,
+        help=(
+            "O motor automático usa análise de layout por IA e é o melhor para "
+            "papers de duas colunas. Se a ordem de leitura sair embaralhada, "
+            "experimente o motor clássico."
+        ),
+    )
+    strip_headers_footers = st.checkbox(
+        "Remover cabeçalhos, rodapés e nº de página",
+        value=True,
+        help="Descarta o texto repetido no topo/rodapé de cada página do PDF.",
+    )
+    include_picture_text = st.checkbox(
+        "Incluir texto sobreposto a figuras",
+        value=False,
+        help=(
+            "O texto dentro de diagramas e figuras costuma sair embaralhado; "
+            "mantenha desligado para um Markdown mais limpo."
+        ),
+    )
+
 options = PdfOptions(
     theme=theme,
     page_size=page_size,
     margin=margin,
     show_page_numbers=show_page_numbers,
     highlight_style=highlight_style,
+)
+
+extract_options = PdfExtractOptions(
+    engine=pdf_engine,
+    strip_headers_footers=strip_headers_footers,
+    include_picture_text=include_picture_text,
 )
 
 
@@ -110,7 +143,9 @@ with tab_arquivos:
             with st.expander(f"📄 {uploaded.name}", expanded=len(uploaded_files) == 1):
                 try:
                     # Chamar extrator que agora processa PDFs pelo pymupdf4llm
-                    text = extract_markdown(uploaded.name, uploaded.getvalue())
+                    text = extract_markdown(
+                        uploaded.name, uploaded.getvalue(), extract_options
+                    )
                 except Exception as exc:
                     st.error(f"Erro ao ler '{uploaded.name}': {exc}")
                     continue
@@ -149,7 +184,9 @@ with tab_arquivos:
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                 for uploaded in uploaded_files:
                     try:
-                        text = extract_markdown(uploaded.name, uploaded.getvalue())
+                        text = extract_markdown(
+                            uploaded.name, uploaded.getvalue(), extract_options
+                        )
                         pdf_data = markdown_to_pdf(text, options)
                     except Exception as exc:
                         st.error(f"Falha em '{uploaded.name}': {exc}")
@@ -178,6 +215,9 @@ with st.expander("ℹ️ Sobre este aplicativo"):
         3. **Editor em Tempo Real**: Altere o Markdown gerado e decida se quer copiar para o LLM ou converter em um novo PDF elegante e diagramado.
         
         ### Recursos suportados
+        - Reconstrução da ordem de leitura em papers de duas colunas (motor de layout por IA).
+        - Remoção automática de cabeçalhos, rodapés e números de página repetidos.
+        - Religação de parágrafos quebrados entre colunas e páginas.
         - Extração inteligente de tabelas de PDFs estruturados.
         - Detecção de equações matemáticas no formato LaTeX (`$...$` e `$$...$$`).
         - Formatação de títulos, listas e códigos em blocos de programação.
