@@ -2,4 +2,7 @@ streamlit>=1.40,<2.0
 pypandoc>=1.13,<2.0
 mammoth>=1.8,<2.0
 weasyprint>=63,<66
-pymupdf4llm>=0.2.2
+# pymupdf4llm >= 1.28 traz o motor de layout por IA (pymupdf-layout), essencial
+# para extrair papers de duas colunas na ordem de leitura correta.
+pymupdf4llm>=1.28,<2.0
+pymupdf-layout>=1.28
